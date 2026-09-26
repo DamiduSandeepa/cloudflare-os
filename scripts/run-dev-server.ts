@@ -137,8 +137,13 @@ function waitForPort(port: number, timeoutMs: number): Promise<void> {
   });
 }
 
+// HomeOS: `--no-watch` skips the persistent UI rebuild watchers (~3 GB on a small server that never edits
+// the source). Wrangler still serves the already-built outputs.
+const noWatch = process.argv.includes("--no-watch");
+
 // Spawn a persistent watcher.
 function spawnDevWatcher(label: string, command: string, args: string[]): void {
+  if (noWatch) return;
   const watcher = spawn(command, args, { stdio: "inherit", cwd: ROOT });
   watcher.on("exit", (code, signal) => {
     if (stoppingDevWatchers) return;
