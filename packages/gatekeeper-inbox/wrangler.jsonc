@@ -26,6 +26,8 @@
   //   FORWARD_URL      where /in bodies are POSTed
   //   REPLY_URL        where agent replies are POSTed
   //   FORWARD_SECRET   sent with both, in the FORWARD_SECRET_HEADER header
+  //   TOOLS_URL        optional MCP endpoint whose read-only tools the agent gets as env.HOMEOS_AGENT
+  //   TOOLS_TOKEN      bearer token for TOOLS_URL
   "vars": {
     "FORWARD_SECRET_HEADER": "x-inbox-secret"
   },

@@ -9,6 +9,11 @@
 //
 // /in and /chat take different secrets so a leaked Shortcut secret can only forward, never drive
 // the agent. The vendor has no connectable resources, so the Workshop hides it from users.
+//
+// While a chat turn runs, the Workshop exposes its reply target to agent code as env.HOMEOS_AGENT.
+// When TOOLS_URL names an MCP endpoint, that target also offers the endpoint's read-only tools, and
+// each prompt gets a one-line hint saying how to call them. Write tools stay out of reach here:
+// they belong behind the Workshop's approval flow.
 
 import { RpcTarget, WorkerEntrypoint, restore, type RpcStub } from "cloudflare:workers";
 import { validateRpc } from "capnweb-validate";
@@ -33,6 +38,12 @@ type ChatRequest = {
 };
 
 type ReplyParams = { chatKey: string; messageKey: string };
+
+type ToolInfo = { name: string; description: string; inputSchema: Record<string, unknown> };
+
+const TOOLS_HINT = "(Your data tools, in executeCode: `await env.HOMEOS_AGENT.listTools()` lists them and " +
+    "`await env.HOMEOS_AGENT.callTool(name, args)` runs one and returns text. Never call " +
+    "env.HOMEOS_AGENT.onGadgetResponse.)";
 
 export default class Inbox extends WorkerEntrypoint<Cloudflare.Env> {
   async fetch(req: Request): Promise<Response> {
@@ -76,7 +87,7 @@ export default class Inbox extends WorkerEntrypoint<Cloudflare.Env> {
         gadgetTitle: body.gadgetTitle ?? "Inbox",
         chatKey,
         messageKey,
-        prompt: body.prompt,
+        prompt: env.TOOLS_URL ? `${body.prompt}\n\n${TOOLS_HINT}` : body.prompt,
         modelId: body.modelId,
         chatGatewayRpcTarget,
       });
@@ -119,6 +130,52 @@ class ReplyTarget extends RpcTarget {
     });
     // Throwing leaves the reply queued in the Workshop, which retries the delivery later.
     if (!res.ok) throw new Error(`reply delivery failed: HTTP ${res.status}`);
+  }
+
+  /** The read-only tools at TOOLS_URL. */
+  async listTools(): Promise<ToolInfo[]> {
+    return (await this.#readOnlyTools()).map(({ name, description, inputSchema }) =>
+      ({ name, description, inputSchema }));
+  }
+
+  /** Runs a read-only tool and returns its text output. */
+  async callTool(name: string, args?: Record<string, unknown>): Promise<string> {
+    // Checked against a fresh list on every call, so a tool that stops being read-only is refused.
+    if (!(await this.#readOnlyTools()).some(tool => tool.name === name)) {
+      throw new Error(`No read-only tool named "${name}". Call listTools() to see them.`);
+    }
+    const result = await this.#mcp("tools/call", { name, arguments: args ?? {} }) as {
+      content?: { type: string; text?: string }[];
+      isError?: boolean;
+    };
+    const text = (result.content ?? []).map(part => part.text ?? "").join("\n");
+    if (result.isError) throw new Error(text || `${name} failed`);
+    return text;
+  }
+
+  async #readOnlyTools(): Promise<(ToolInfo & { annotations?: { readOnlyHint?: boolean } })[]> {
+    const { tools } = await this.#mcp("tools/list", {}) as {
+      tools: (ToolInfo & { annotations?: { readOnlyHint?: boolean } })[];
+    };
+    return tools.filter(tool => tool.annotations?.readOnlyHint === true);
+  }
+
+  // One stateless JSON-RPC request; enough for servers that answer with plain JSON.
+  async #mcp(method: string, params: Record<string, unknown>): Promise<unknown> {
+    if (!this.#env.TOOLS_URL) throw new Error("No tools are configured for this chat.");
+    const res = await fetch(this.#env.TOOLS_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        ...(this.#env.TOOLS_TOKEN ? { authorization: `Bearer ${this.#env.TOOLS_TOKEN}` } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    });
+    if (!res.ok) throw new Error(`Tools endpoint answered HTTP ${res.status}`);
+    const body = await res.json() as { result?: unknown; error?: { message: string } };
+    if (body.error) throw new Error(body.error.message);
+    return body.result;
   }
 }
 

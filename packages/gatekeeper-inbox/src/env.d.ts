@@ -17,6 +17,8 @@ declare namespace Cloudflare {
     REPLY_URL?: string;
     FORWARD_SECRET?: string;
     FORWARD_SECRET_HEADER: string;
+    TOOLS_URL?: string;
+    TOOLS_TOKEN?: string;
   }
 }
 
