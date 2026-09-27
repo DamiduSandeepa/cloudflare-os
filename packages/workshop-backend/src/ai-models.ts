@@ -160,6 +160,9 @@ function workersAiCompat(catalog: Model<Api> | undefined): OpenAICompletionsComp
     supportsStore: false,
     supportsDeveloperRole: false,
     supportsLongCacheRetention: false,
+    // Workers AI rejects an assistant message with `content: null` (sent after a tool call) with
+    // a bare 400; this makes pi send "" instead.
+    requiresAssistantAfterToolResult: true,
     ...(catalog?.compat as OpenAICompletionsCompat | undefined),
     sendSessionAffinityHeaders: true,
   };
