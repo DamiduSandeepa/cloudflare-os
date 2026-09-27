@@ -1770,6 +1770,89 @@ class OverseerImpl implements AgentHooks {
     return ctx;
   }
 
+  /** Deletes a chat and everything stored for it. The single cleanup point for chats. */
+  async deleteChat(chatId: number): Promise<void> {
+    let startedAt = Date.now();
+    let response = this.storage.gadgetResponseDeliveries.undeliveredByChatId.get(chatId);
+    if (response?.status === "waiting") {
+      this.deliverExternalMessageResponse(response, "The chat was deleted before the agent responded.");
+    }
+
+    // Delete the chat's workpiece registry footprint: provisional gadgets, all of its worktrees,
+    // and provisional binding edges.
+    await this.removeChatWorkpieces(chatId);
+    this.storage.chatMeta.delete(chatId);
+    this.storage.chatContext.delete(chatId);
+    // Buffer the keys first: deleting invalidates the list cursor.
+    let checkpoints = Array.from(
+        this.storage.chatCompactions.list({prefix: `${keyString(chatId)}.`}),
+        checkpoint => compactionKey(chatId, checkpoint.compactedTo));
+    for (let key of checkpoints) this.storage.chatCompactions.delete(key);
+
+    // The chat's change stream: rows (retired included), the straggler-bridge boundary, and the
+    // per-client dedupe records (which live exactly as long as the chat -- see submitCodeChange).
+    this.deleteAllChatChanges(chatId);
+    for (let record of Array.from(this.storage.chatChangeClients.list(
+        {prefix: `${keyString(chatId)}.`}))) {
+      this.storage.chatChangeClients.delete(
+          `${keyString(record.chatId)}.${record.userId}:${record.clientId}`);
+    }
+
+    // Any pre-conversion legacy drafts (see ChatDraftUpdateRecord).
+    for (let draft of Array.from(this.storage.chatDraftUpdates.list(
+        {prefix: `${keyString(chatId)}.`}))) {
+      this.storage.chatDraftUpdates.delete(
+          `${keyString(draft.chatId)}.${keyString(draft.timestamp.valueOf())}`);
+    }
+
+    // Delete the chat's messages and the attachment content referenced by them. Attachment metadata
+    // is canonical in each message's ChatAttachmentRef, so no separate attachment index is needed.
+    this.ctx.storage.transactionSync(() => {
+      for (let msg of this.storage.chats.list({prefix: `${keyString(chatId)}.`})) {
+        if (msg.type === "message") {
+          for (let attachment of msg.attachments ?? []) {
+            let content = this.storage.chatAttachmentContent.get(attachment.id);
+            if (content?.state.type === "committed" && content.state.chatId === chatId) {
+              this.storage.chatAttachmentContent.delete(attachment.id);
+            }
+          }
+        }
+        this.storage.chats.delete(`${keyString(msg.chatId)}.${keyString(msg.sequence)}`);
+      }
+    });
+
+    // Clean up agentCallbackArgs for this chat, and any calls to its agent not yet delivered.
+    for (let entry of this.storage.agentCallbackArgs.list(
+        {prefix: `${keyString(chatId)}.`})) {
+      this.storage.agentCallbackArgs.delete(
+          `${keyString(entry.chatId)}.${keyString(entry.sequence)}`);
+    }
+    for (let entry of Array.from(this.storage.pendingAgentCalls.list(
+        {prefix: `${keyString(chatId)}.`}))) {
+      this.storage.pendingAgentCalls.delete(
+          `${keyString(entry.chatId)}.${keyString(entry.callId)}`);
+    }
+
+    // Clean up the chat's model-facing snapshots.
+    for (let entry of this.storage.chatModelData.list(
+        {prefix: `${keyString(chatId)}.`})) {
+      this.storage.chatModelData.delete(
+          `${keyString(entry.chatId)}.${keyString(entry.sequence)}`);
+    }
+
+    // Defensively drop any resume record so a deleted chat is never resumed. (Aborting the agent
+    // below also clears this via the tracked promise's finally, but the chat may have no live
+    // agent in memory, e.g. after a restart before resumption ran.)
+    this.storage.activeAgents.delete(chatId);
+
+    // Clean up all in-memory live state for this chat.
+    this.destroyLiveChat(chatId);
+
+    this.logger.info("deleted chat", {
+      event: "chat.delete.completed", chatId, durationMs: Date.now() - startedAt,
+    });
+  }
+
   // Forcefully tear down all live state for a chat (e.g. on deletion). Cancels any running agent.
   // (Undelivered calls to the agent live in storage -- `pendingAgentCalls` -- not here; deleteChat
   // removes them itself.)
@@ -11847,85 +11930,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async deleteChat(chatId: number): Promise<void> {
-    let startedAt = Date.now();
-    let response = this.impl.storage.gadgetResponseDeliveries.undeliveredByChatId.get(chatId);
-    if (response?.status === "waiting") {
-      this.impl.deliverExternalMessageResponse(response, "The chat was deleted before the agent responded.");
-    }
-
-    // Delete the chat's workpiece registry footprint: provisional gadgets, all of its worktrees,
-    // and provisional binding edges.
-    await this.impl.removeChatWorkpieces(chatId);
-    this.impl.storage.chatMeta.delete(chatId);
-    this.impl.storage.chatContext.delete(chatId);
-    // Buffer the keys first: deleting invalidates the list cursor.
-    let checkpoints = Array.from(
-        this.impl.storage.chatCompactions.list({prefix: `${keyString(chatId)}.`}),
-        checkpoint => compactionKey(chatId, checkpoint.compactedTo));
-    for (let key of checkpoints) this.impl.storage.chatCompactions.delete(key);
-
-    // The chat's change stream: rows (retired included), the straggler-bridge boundary, and the
-    // per-client dedupe records (which live exactly as long as the chat -- see submitCodeChange).
-    this.impl.deleteAllChatChanges(chatId);
-    for (let record of Array.from(this.impl.storage.chatChangeClients.list(
-        {prefix: `${keyString(chatId)}.`}))) {
-      this.impl.storage.chatChangeClients.delete(
-          `${keyString(record.chatId)}.${record.userId}:${record.clientId}`);
-    }
-
-    // Any pre-conversion legacy drafts (see ChatDraftUpdateRecord).
-    for (let draft of Array.from(this.impl.storage.chatDraftUpdates.list(
-        {prefix: `${keyString(chatId)}.`}))) {
-      this.impl.storage.chatDraftUpdates.delete(
-          `${keyString(draft.chatId)}.${keyString(draft.timestamp.valueOf())}`);
-    }
-
-    // Delete the chat's messages and the attachment content referenced by them. Attachment metadata
-    // is canonical in each message's ChatAttachmentRef, so no separate attachment index is needed.
-    this.impl.ctx.storage.transactionSync(() => {
-      for (let msg of this.impl.storage.chats.list({prefix: `${keyString(chatId)}.`})) {
-        if (msg.type === "message") {
-          for (let attachment of msg.attachments ?? []) {
-            let content = this.impl.storage.chatAttachmentContent.get(attachment.id);
-            if (content?.state.type === "committed" && content.state.chatId === chatId) {
-              this.impl.storage.chatAttachmentContent.delete(attachment.id);
-            }
-          }
-        }
-        this.impl.storage.chats.delete(`${keyString(msg.chatId)}.${keyString(msg.sequence)}`);
-      }
-    });
-
-    // Clean up agentCallbackArgs for this chat, and any calls to its agent not yet delivered.
-    for (let entry of this.impl.storage.agentCallbackArgs.list(
-        {prefix: `${keyString(chatId)}.`})) {
-      this.impl.storage.agentCallbackArgs.delete(
-          `${keyString(entry.chatId)}.${keyString(entry.sequence)}`);
-    }
-    for (let entry of Array.from(this.impl.storage.pendingAgentCalls.list(
-        {prefix: `${keyString(chatId)}.`}))) {
-      this.impl.storage.pendingAgentCalls.delete(
-          `${keyString(entry.chatId)}.${keyString(entry.callId)}`);
-    }
-
-    // Clean up the chat's model-facing snapshots.
-    for (let entry of this.impl.storage.chatModelData.list(
-        {prefix: `${keyString(chatId)}.`})) {
-      this.impl.storage.chatModelData.delete(
-          `${keyString(entry.chatId)}.${keyString(entry.sequence)}`);
-    }
-
-    // Defensively drop any resume record so a deleted chat is never resumed. (Aborting the agent
-    // below also clears this via the tracked promise's finally, but the chat may have no live
-    // agent in memory, e.g. after a restart before resumption ran.)
-    this.impl.storage.activeAgents.delete(chatId);
-
-    // Clean up all in-memory live state for this chat.
-    this.impl.destroyLiveChat(chatId);
-
-    this.impl.logger.info("deleted chat", {
-      event: "chat.delete.completed", chatId, durationMs: Date.now() - startedAt,
-    });
+    await this.impl.deleteChat(chatId);
   }
 
   async stopAgent(chatId: number): Promise<void> {
