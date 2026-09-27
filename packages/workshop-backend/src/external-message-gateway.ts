@@ -18,6 +18,13 @@ export class ExternalMessageGateway extends WorkerEntrypoint<Cloudflare.Env, Ext
     return await caller.whoamiIfExists() ? caller.listModels() : [];
   }
 
+  async deleteExternalChat(callerEmail: string, gadgetKey: string, chatKey: string): Promise<boolean> {
+    let source = this.ctx.props.source;
+    if (!source) throw new Error("ExternalMessageGateway source prop is required.");
+    let overseer = this.ctx.exports.OverseerDurableObject.getByName(`${source}:${gadgetKey}`);
+    return await overseer.deleteExternalChat(callerEmail, `${source}:${chatKey}`);
+  }
+
   async submitExternalMessage(input: SubmitExternalMessageInput): Promise<SubmitExternalMessageResult> {
     let source = this.ctx.props.source;
     if (!source) throw new Error("ExternalMessageGateway source prop is required.");

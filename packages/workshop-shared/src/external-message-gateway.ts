@@ -54,6 +54,11 @@ export type SubmitExternalMessageResult =
 export interface ExternalMessageGateway {
   /** Models available to the gateway's trusted caller account. */
   listModels(callerEmail: string): Promise<AiChatAuthorInfo[]>;
+  /**
+   * Delete a chat this gateway created (same gadgetKey and chatKey as its messages). Only the
+   * workspace owner may; returns false when the caller isn't the owner or the chat doesn't exist.
+   */
+  deleteExternalChat(callerEmail: string, gadgetKey: string, chatKey: string): Promise<boolean>;
   /** Submit an external chat message for Gadget routing and execution. */
   submitExternalMessage(input: SubmitExternalMessageInput): Promise<SubmitExternalMessageResult>;
 }

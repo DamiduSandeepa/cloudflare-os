@@ -6,6 +6,7 @@
 //                                  the agent's reply is POSTed to REPLY_URL. Checked against
 //                                  CHAT_SECRET.
 //   GET  /gatekeeper/inbox/models  Models the owner can pick for a chat turn. CHAT_SECRET.
+//   DELETE /gatekeeper/inbox/chat  Deletes a chat /chat created ({chatKey, gadgetKey?}). CHAT_SECRET.
 //
 // /in and /chat take different secrets so a leaked Shortcut secret can only forward, never drive
 // the agent. The vendor has no connectable resources, so the Workshop hides it from users.
@@ -92,6 +93,16 @@ export default class Inbox extends WorkerEntrypoint<Cloudflare.Env> {
         chatGatewayRpcTarget,
       });
       return json(result, result.accepted ? 202 : 409);
+    }
+
+    if (path === "/chat" && req.method === "DELETE") {
+      if (!(await secretMatches(given, env.CHAT_SECRET))) return unauthorized();
+      if (!env.OWNER_EMAIL) return json({ error: "OWNER_EMAIL is not configured" }, 503);
+      const body = await req.json().catch(() => null) as { chatKey?: unknown; gadgetKey?: unknown } | null;
+      if (typeof body?.chatKey !== "string" || !body.chatKey) return json({ error: "expected {chatKey, gadgetKey?}" }, 400);
+      const gadgetKey = typeof body.gadgetKey === "string" ? body.gadgetKey : "main";
+      const deleted = await env.WORKSHOP_EXTERNAL_MESSAGES.deleteExternalChat(env.OWNER_EMAIL, gadgetKey, body.chatKey);
+      return json({ deleted });
     }
 
     if (path === "/models" && req.method === "GET") {

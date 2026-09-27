@@ -10075,6 +10075,20 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return externalChat;
   }
 
+  /**
+   * Deletes the chat an external gateway created for `externalChatKey`. Only the workspace owner
+   * may do this. Returns false when the caller isn't the owner or the chat doesn't exist.
+   */
+  async deleteExternalChat(callerEmail: string, externalChatKey: string): Promise<boolean> {
+    let callerId = this.impl.users.getByName(callerEmail).id.toString();
+    if (!this.impl.ownerId || this.impl.ownerId !== callerId) return false;
+    let externalChat = this.#getExternalChat(externalChatKey);
+    if (!externalChat) return false;
+    await this.impl.deleteChat(externalChat.chatId);
+    this.impl.storage.externalChats.delete(externalChatKey);
+    return true;
+  }
+
   async receiveExternalMessage(
     input: ExternalMessageSubmitInput,
   ): Promise<SubmitExternalMessageResult> {
