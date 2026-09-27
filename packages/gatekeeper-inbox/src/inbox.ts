@@ -12,9 +12,9 @@
 // the agent. The vendor has no connectable resources, so the Workshop hides it from users.
 //
 // While a chat turn runs, the Workshop exposes its reply target to agent code as env.HOMEOS_AGENT.
-// When TOOLS_URL names an MCP endpoint, that target also offers the endpoint's read-only tools, and
-// each prompt gets a one-line hint saying how to call them. Write tools stay out of reach here:
-// they belong behind the Workshop's approval flow.
+// When TOOLS_URL names an MCP endpoint, that target also offers the endpoint's read-only tools, plus
+// the write tools named in TOOLS_ALLOW_WRITE, and each prompt gets a one-line hint saying how to call
+// them. Every other write tool stays out of reach here: it belongs behind the Workshop's approval flow.
 
 import { RpcTarget, WorkerEntrypoint, restore, type RpcStub } from "cloudflare:workers";
 import { validateRpc } from "capnweb-validate";
@@ -41,6 +41,7 @@ type ChatRequest = {
 type ReplyParams = { chatKey: string; messageKey: string };
 
 type ToolInfo = { name: string; description: string; inputSchema: Record<string, unknown> };
+type ListedTool = ToolInfo & { annotations?: { readOnlyHint?: boolean } };
 
 const TOOLS_HINT = "(Your data tools, in executeCode: `await env.HOMEOS_AGENT.listTools()` lists them and " +
     "`await env.HOMEOS_AGENT.callTool(name, args)` runs one and returns text. Never call " +
@@ -143,17 +144,17 @@ class ReplyTarget extends RpcTarget {
     if (!res.ok) throw new Error(`reply delivery failed: HTTP ${res.status}`);
   }
 
-  /** The read-only tools at TOOLS_URL. */
+  /** The tools at TOOLS_URL the agent may run: read-only ones and the allowed write ones. */
   async listTools(): Promise<ToolInfo[]> {
-    return (await this.#readOnlyTools()).map(({ name, description, inputSchema }) =>
+    return (await this.#allowedTools()).map(({ name, description, inputSchema }) =>
       ({ name, description, inputSchema }));
   }
 
-  /** Runs a read-only tool and returns its text output. */
+  /** Runs an allowed tool and returns its text output. */
   async callTool(name: string, args?: Record<string, unknown>): Promise<string> {
     // Checked against a fresh list on every call, so a tool that stops being read-only is refused.
-    if (!(await this.#readOnlyTools()).some(tool => tool.name === name)) {
-      throw new Error(`No read-only tool named "${name}". Call listTools() to see them.`);
+    if (!(await this.#allowedTools()).some(tool => tool.name === name)) {
+      throw new Error(`No tool named "${name}" is available here. Call listTools() to see them.`);
     }
     const result = await this.#mcp("tools/call", { name, arguments: args ?? {} }) as {
       content?: { type: string; text?: string }[];
@@ -164,11 +165,12 @@ class ReplyTarget extends RpcTarget {
     return text;
   }
 
-  async #readOnlyTools(): Promise<(ToolInfo & { annotations?: { readOnlyHint?: boolean } })[]> {
-    const { tools } = await this.#mcp("tools/list", {}) as {
-      tools: (ToolInfo & { annotations?: { readOnlyHint?: boolean } })[];
-    };
-    return tools.filter(tool => tool.annotations?.readOnlyHint === true);
+  // Write tools pass only when named in TOOLS_ALLOW_WRITE, so a new write tool on the endpoint (such
+  // as one that moves money) stays behind the approval flow until someone allows it here.
+  async #allowedTools(): Promise<ListedTool[]> {
+    const { tools } = await this.#mcp("tools/list", {}) as { tools: ListedTool[] };
+    const writes = new Set((this.#env.TOOLS_ALLOW_WRITE ?? "").split(",").map(n => n.trim()).filter(Boolean));
+    return tools.filter(tool => tool.annotations?.readOnlyHint === true || writes.has(tool.name));
   }
 
   // One stateless JSON-RPC request; enough for servers that answer with plain JSON.

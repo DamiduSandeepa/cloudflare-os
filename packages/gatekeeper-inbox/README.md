@@ -16,8 +16,9 @@ is at least once, so the receiver should upsert by `messageKey`.
 
 While the turn runs, the Workshop exposes that target to agent code as `env.HOMEOS_AGENT`. With
 `TOOLS_URL` set to an MCP endpoint, it also offers `listTools()` and `callTool(name, args)` for the
-endpoint's **read-only** tools (by `readOnlyHint`, rechecked on every call), and each prompt gets a
-one-line hint about them. Write tools stay behind the Workshop's approval flow.
+endpoint's **read-only** tools (by `readOnlyHint`) and the write tools named in `TOOLS_ALLOW_WRITE`,
+rechecked on every call, and each prompt gets a one-line hint about them. Every other write tool
+stays behind the Workshop's approval flow.
 
 ## Config
 
@@ -33,6 +34,8 @@ FORWARD_SECRET=...
 FORWARD_SECRET_HEADER=x-homeos-secret
 TOOLS_URL=http://127.0.0.1:8790/mcp
 TOOLS_TOKEN=...
+# HomeOS planner tools; its money tools (categorize_transaction, add_rule, add_bank_sms) stay out.
+TOOLS_ALLOW_WRITE=add_task,update_task,add_block,update_block,move_unfinished
 ```
 
 ## Smoke test

@@ -19,6 +19,8 @@ declare namespace Cloudflare {
     FORWARD_SECRET_HEADER: string;
     TOOLS_URL?: string;
     TOOLS_TOKEN?: string;
+    /** Comma-separated write tools at TOOLS_URL the agent may run without approval. */
+    TOOLS_ALLOW_WRITE?: string;
   }
 }
 
