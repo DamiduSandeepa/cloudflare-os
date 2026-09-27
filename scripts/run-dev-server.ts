@@ -503,7 +503,9 @@ for (const gk of gatekeepers) {
   const config = parse(readFileSync(srcPath, "utf8"));
   config.build = devBuildConfig(config.build, gk.dir);
   config.vars = config.vars || {};
-  config.vars.BASE_URL = `http://${backendHost}/gatekeeper/${gk.name.slice("gatekeeper-".length)}`;
+  // HomeOS: behind a reverse proxy (Tailscale Serve) the browser-facing origin differs from the
+  // local wrangler host, so PUBLIC_BASE_URL (when set) is also where gatekeeper pages live.
+  config.vars.BASE_URL = `${process.env.PUBLIC_BASE_URL ?? `http://${backendHost}`}/gatekeeper/${gk.name.slice("gatekeeper-".length)}`;
 
   const shared = SHARED_GATEKEEPER_CREDS[gk.name];
   if (shared && process.env[shared.id] && process.env[shared.secret]) {
