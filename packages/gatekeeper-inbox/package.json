@@ -1,0 +1,21 @@
+{
+  "name": "@gadgets/gatekeeper-inbox",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/inbox.ts",
+  "scripts": {
+    "dev": "echo \"run 'pnpm dev-server' in the root directory instead\" >&2 && exit 1",
+    "smoke": "node scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@gadgets/workshop-shared": "workspace:*",
+    "capnweb": "catalog:",
+    "capnweb-validate": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "typescript": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

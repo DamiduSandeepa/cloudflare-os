@@ -1,0 +1,37 @@
+{
+  "name": "gatekeeper-inbox",
+  "main": ".wrangler/validate/src/inbox.ts",
+  "build": {
+    "command": "pnpm exec capnweb-validate build --out .wrangler/validate",
+    "watch_dir": "src"
+  },
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["allow_irrevocable_stub_storage"],
+
+  // Chat turns enter the Workshop through its external-message gateway, the way a chat-integration
+  // worker would. `source` namespaces this bridge's gadget, chat and message keys.
+  "services": [
+    {
+      "binding": "WORKSHOP_EXTERNAL_MESSAGES",
+      "service": "workshop-backend",
+      "entrypoint": "ExternalMessageGateway",
+      "props": { "source": "inbox" }
+    }
+  ],
+
+  // Site settings and secrets live in a gitignored `.dev.vars` beside this file:
+  //   IN_SECRET        callers of /in send it as `x-inbox-secret` (e.g. an iPhone Shortcut)
+  //   CHAT_SECRET      callers of /chat and /models send it as `x-inbox-secret`
+  //   OWNER_EMAIL      the Gadgets account chat turns run as
+  //   FORWARD_URL      where /in bodies are POSTed
+  //   REPLY_URL        where agent replies are POSTed
+  //   FORWARD_SECRET   sent with both, in the FORWARD_SECRET_HEADER header
+  "vars": {
+    "FORWARD_SECRET_HEADER": "x-inbox-secret"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": { "invocation_logs": false }
+  }
+}
