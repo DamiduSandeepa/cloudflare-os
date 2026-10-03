@@ -52,6 +52,10 @@ const EXPECTED: Record<string, ExpectedArea> = {
     forwarded: ["VITE_FRONTEND_ERROR_REPORTING"],
     injected: ["GATEKEEPER_APP_UNMINIFIED"],
   },
+  // `scripts/smoke.ts` is run by hand against a live dev server (`pnpm smoke`), never as a vp task.
+  "packages/gatekeeper-inbox": {
+    external: ["INBOX_URL", "REPLY_PORT"],
+  },
   "packages/gatekeeper-scheduler": {
     forwarded: ["VITE_FRONTEND_ERROR_REPORTING"],
     injected: ["GATEKEEPER_APP_UNMINIFIED"],
@@ -92,7 +96,7 @@ const EXPECTED: Record<string, ExpectedArea> = {
       "CI_COMMIT_SHA", "CI_PIPELINE_IID", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN",
       "GITHUB_REPOSITORY", "GITHUB_TOKEN", "PREVIEW_ADMINS", "PREVIEW_GITHUB_CLIENT_ID",
       "PREVIEW_GITHUB_CLIENT_SECRET", "PREVIEW_NAME", "PREVIEW_PR_NUMBER",
-      "PREVIEW_WORKERS_DEV_HOST", "PREVIEW_WRANGLER", "VITE_BACKEND_HOST",
+      "PREVIEW_WORKERS_DEV_HOST", "PREVIEW_WRANGLER", "PUBLIC_BASE_URL", "VITE_BACKEND_HOST",
       // Read by `vp/concurrency.ts` in the wrapper before `vp` starts, never inside a task.
       "VP_RUN_CONCURRENCY_LIMIT",
     ],
