@@ -1,6 +1,8 @@
-import { Cursor } from "@gadgets/workshop-shared/gatekeeper";
-
-export type { Cursor };
+/** Forward-only paginated results. Call `next()` until it returns `null`; dispose the cursor when
+ *  finished, including when stopping early. */
+export interface Cursor<T> {
+  next(): Promise<T[] | null>;
+}
 
 // ── Plain data types ────────────────────────────────────────────────
 
@@ -19,8 +21,17 @@ export type EmailAddress = {
 export type EmailRecipient = string;
 
 /**
- * A stable RFC 5322 Message-ID reserved for an outgoing message.
- * Once the message has been sent, this value can be passed to {@link GmailScopedSession.getMessage}.
+ * A stable RFC 5322 Message-ID reserved for an outgoing message. Pass it to
+ * {@link GmailScopedSession.getMessage} to open the message, which works as soon as the method
+ * that sent it returns.
+ *
+ * A message you have just sent may not have been delivered yet. Until it has been:
+ * - It can be read, but not changed: its labels cannot be modified, and it cannot be replied to
+ *   or forwarded. Those methods throw.
+ * - A reply already appears in its thread. New mail and forwards have no thread yet, so their
+ *   {@link GmailMessage.thread} throws.
+ * - Its {@link GmailMessageInfo.id} is this value. Keep using it: it continues to identify the
+ *   message after delivery.
  */
 export type GmailMessageId = string;
 
@@ -34,6 +45,12 @@ export type GmailThreadInfo = {
   subject: string;
   /** The number of messages represented by this thread capability. */
   messageCount: number;
+  /**
+   * The ID of the newest represented message. After showing this thread to a user, pass it to a
+   * {@link GmailThread} mutation such as `archive(latestMessageId)` so messages that arrive
+   * afterwards are left alone.
+   */
+  latestMessageId: string;
   /** The timestamp of the newest represented message. */
   timestamp: Date;
   /** Unique senders and recipients across the represented messages. */
@@ -46,9 +63,16 @@ export type GmailThreadInfo = {
 
 /** Metadata describing a Gmail message. */
 export type GmailMessageInfo = {
-  /** Gmail's stable identifier for the message. */
+  /**
+   * Gmail's stable identifier for the message. A message you have just sent has its
+   * {@link GmailMessageId} here until Gmail assigns its own identifier.
+   * {@link GmailScopedSession.getMessage} accepts both.
+   */
   id: string;
-  /** Gmail's stable identifier for the containing thread. */
+  /**
+   * Gmail's stable identifier for the containing thread. Absent for new mail or a forward you
+   * have just sent, until Gmail assigns its thread.
+   */
   threadId?: string;
   /** The sender. */
   from: EmailAddress;
@@ -236,6 +260,10 @@ export interface GmailScopedSession {
    * Search for threads with Gmail's native query syntax. Useful operators
    * include `from:`, `to:`, `after:`, `before:`, `is:unread`, and `label:`.
    * Any search or label restriction on the binding is also applied.
+   *
+   * Note that search results may not reflect label changes you have made
+   * recently, since such changes are sometimes held for approval and this
+   * search function is currently unable to simulate pending labels.
    */
   searchThreads(query: string): Promise<Cursor<GmailThreadEntry>>;
 
@@ -251,9 +279,13 @@ export interface GmailScopedSession {
 
   /**
    * Search for individual messages with Gmail's native query syntax. Any
-   * search or label restriction on the binding is also applied. Gmail may
-   * briefly omit newly-sent mail from search results; retry a query such as
-   * `in:sent ...` instead of treating the first empty result as a send failure.
+   * search or label restriction on the binding is also applied. Mail you have
+   * just sent may not appear in search results; open it with
+   * {@link getMessage} and the identifier its send returned instead.
+   *
+   * Note that search results may not reflect label changes you have made
+   * recently, since such changes are sometimes held for approval and this
+   * search function is currently unable to simulate pending labels.
    */
   searchMessages(query: string): Promise<Cursor<GmailMessageEntry>>;
 
@@ -292,7 +324,7 @@ export interface GmailSession extends GmailScopedSession {
    * Compose and send a new email. `body` is the plain-text representation;
    * `options.html`, when provided, is sent as its HTML alternative. At least
    * one To, CC, or BCC recipient is required. Returns an identifier that can
-   * be passed to {@link GmailScopedSession.getMessage} once the message has been sent.
+   * be passed to {@link GmailScopedSession.getMessage}.
    */
   send(
     to: EmailRecipient[],
@@ -323,7 +355,15 @@ export interface GmailSession extends GmailScopedSession {
   deleteLabel(label: GmailCustomLabel): Promise<void>;
 }
 
-/** Access to one Gmail thread admitted by the binding's scope. */
+/**
+ * Access to one Gmail thread admitted by the binding's scope.
+ *
+ * Each mutation applies to the thread's messages available through this capability, up to and
+ * including `lastMessageId` in thread order (oldest first). Pass the newest message the user or
+ * agent actually saw, such as {@link GmailThreadInfo.latestMessageId}, so a reply that arrives
+ * afterwards is not archived, marked read, or labeled unseen. When omitted, the mutation applies to
+ * all messages present at the time the method is called.
+ */
 export interface GmailThread {
   /**
    * Get the subject, snippet, and count for the messages this thread
@@ -352,37 +392,37 @@ export interface GmailThread {
    */
   messagesVisibleTo(address: string): Promise<GmailMessage[]>;
 
-  /** Remove the messages available through this capability from the inbox. */
-  archive(): Promise<void>;
+  /** Remove the thread's messages through `lastMessageId` from the inbox. */
+  archive(lastMessageId?: string): Promise<void>;
 
-  /** Move the messages available through this capability to trash. */
-  trash(): Promise<void>;
+  /** Move the thread's messages through `lastMessageId` to trash. */
+  trash(lastMessageId?: string): Promise<void>;
 
-  /** Mark the messages available through this capability as read. */
-  markRead(): Promise<void>;
+  /** Mark the thread's messages through `lastMessageId` as read. */
+  markRead(lastMessageId?: string): Promise<void>;
 
-  /** Mark the messages available through this capability as unread. */
-  markUnread(): Promise<void>;
+  /** Mark the thread's messages through `lastMessageId` as unread. */
+  markUnread(lastMessageId?: string): Promise<void>;
 
-  /** Star the messages available through this capability. */
-  star(): Promise<void>;
+  /** Star the thread's messages through `lastMessageId`. */
+  star(lastMessageId?: string): Promise<void>;
 
-  /** Remove the star from the messages available through this capability. */
-  unstar(): Promise<void>;
-
-  /**
-   * Apply a mutable label returned by this binding to the available messages.
-   * Use {@link trash}, {@link markUnread}, or {@link star} instead of applying
-   * the equivalent built-in label.
-   */
-  applyLabel(label: GmailMutableLabel): Promise<void>;
+  /** Remove the star from the thread's messages through `lastMessageId`. */
+  unstar(lastMessageId?: string): Promise<void>;
 
   /**
-   * Remove a mutable label returned by this binding from the available messages.
-   * Use {@link archive}, {@link markRead}, or {@link unstar} instead of removing
+   * Apply a mutable label returned by this binding to the thread's messages through
+   * `lastMessageId`. Use {@link trash}, {@link markUnread}, or {@link star} instead of applying
    * the equivalent built-in label.
    */
-  removeLabel(label: GmailMutableLabel): Promise<void>;
+  applyLabel(label: GmailMutableLabel, lastMessageId?: string): Promise<void>;
+
+  /**
+   * Remove a mutable label returned by this binding from the thread's messages through
+   * `lastMessageId`. Use {@link archive}, {@link markRead}, or {@link unstar} instead of removing
+   * the equivalent built-in label.
+   */
+  removeLabel(label: GmailMutableLabel, lastMessageId?: string): Promise<void>;
 }
 
 /** Access to one Gmail message admitted by the binding's scope. */
@@ -413,7 +453,7 @@ export interface GmailMessage {
    * connected mailbox, it uses the first original To recipient. Calculated
    * lists remove the connected mailbox, omit original BCC recipients, and
    * remove duplicates. Returns an identifier that can be passed to
-   * {@link GmailScopedSession.getMessage} once the reply has been sent.
+   * {@link GmailScopedSession.getMessage}.
    */
   reply(body: string, options?: GmailReplyOptions): Promise<GmailMessageId>;
 
@@ -421,8 +461,7 @@ export interface GmailMessage {
    * Reply to the sender plus the original To and CC recipients. Supplying any
    * recipient option replaces that complete calculated set. The connected
    * mailbox and duplicates are removed from calculated recipients. Returns an
-   * identifier that can be passed to {@link GmailScopedSession.getMessage}
-   * once the reply has been sent.
+   * identifier that can be passed to {@link GmailScopedSession.getMessage}.
    */
   replyAll(body: string, options?: GmailReplyOptions): Promise<GmailMessageId>;
 
@@ -432,7 +471,7 @@ export interface GmailMessage {
    * preface and `options.html`, when provided, is its HTML alternative. The
    * original attachments are included as regular attachments. At least one
    * To, CC, or BCC recipient is required. Returns an identifier that can be
-   * passed to {@link GmailScopedSession.getMessage} once the forward has been sent.
+   * passed to {@link GmailScopedSession.getMessage}.
    */
   forward(
     to: EmailRecipient[],
@@ -516,7 +555,7 @@ export interface GmailDraft {
    * Send the draft, preserving its thread placement when it is a reply.
    * Sending requires at least one recipient. New drafts require a plain-text body;
    * reply drafts may have an empty body. Returns an identifier that can be passed
-   * to {@link GmailScopedSession.getMessage} once the draft has been sent.
+   * to {@link GmailScopedSession.getMessage}.
    */
   send(): Promise<GmailMessageId>;
 }

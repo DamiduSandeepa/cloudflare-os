@@ -9,6 +9,7 @@
     "smoke": "node scripts/smoke.ts"
   },
   "dependencies": {
+    "@gadgets/scripts": "workspace:*",
     "@gadgets/workshop-shared": "workspace:*",
     "capnweb": "catalog:",
     "capnweb-validate": "catalog:"

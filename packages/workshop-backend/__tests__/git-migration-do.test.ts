@@ -1,5 +1,5 @@
 // Exercises the git-storage migration through its *real* trigger: the OverseerImpl constructor
-// noticing `version` 1 and running #migrateToGitStorage under blockConcurrencyWhile, over real
+// noticing `version` 1 and running migrateToGitStorage under blockConcurrencyWhile, over real
 // SQLite DO storage -- complementing git-migration.test.ts's direct migrateCodeLogToGit calls on
 // mock storage. Each test seeds a legacy (version-1) workspace into a fresh DO, aborts every DO
 // so the next touch re-runs the constructor, then asserts the migrated snapshots against an
@@ -8,9 +8,8 @@
 // This lives in __tests__/ (the unit workerd config), not __integration__/: the TEST_OVERSEER
 // DO binding exists only in vitest.config.ts, and no public API path can create a legacy
 // workspace anymore (new workspaces are born at version 4), so seeding must reach into
-// impl.storage -- the same pattern as chat-changes.test.ts. The public DO surface (open() etc.)
-// is deliberately never called: #initializeNewWorkspace would stamp version 4 and shadow the
-// scenario.
+// impl.storage. The public DO surface (open() etc.) is deliberately never called:
+// #initializeNewWorkspace would stamp version 4 and shadow the scenario.
 //
 // The version-3 action-index backfill and the version-4 workpiece-type stamp ride the same
 // constructor trigger, so their tests live here too.
@@ -19,7 +18,8 @@ import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:workers";
 import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
 import type { OverseerDurableObject } from "../src/overseer.js";
-import { HISTORY_COMMIT_GAP_MS } from "../src/git-migration";
+import { HISTORY_COMMIT_GAP_MS } from "../src/storage-schema/overseer-git-migration";
+import { OVERSEER_STORAGE_VERSION } from "../src/storage-schema/overseer-migrations";
 import {
   LegacyWorkspace, MINUTE, T0, USER, expectHeadsMatchDoc, readDocFiles, setFile,
 } from "./legacy-workspace";
@@ -31,7 +31,7 @@ declare module "cloudflare:workers" {
   }
 }
 
-// With no ownerId seeded, #ownerCommitIdentity() resolves to this documented fallback without
+// With no ownerId seeded, ownerCommitIdentity() resolves to this documented fallback without
 // contacting any user DO.
 const FALLBACK_OWNER = { name: "Workspace owner", email: "owner@localhost" };
 
@@ -52,14 +52,14 @@ async function seedLegacyWorkspace(
   let ws!: LegacyWorkspace;
   await inOverseer(name, async impl => {
     // Pins the seeding recipe's precondition: a fresh TEST_OVERSEER DO writes *nothing* at
-    // construction (#migrateStorage returns immediately at version 0 with no ownerId). If a
+    // construction (migrateToMultiGadget returns immediately at version 0 with no ownerId). If a
     // future constructor change starts initializing fresh DOs, this fails loudly and the
     // recipe needs rethinking.
     expect(impl.storage.version.get()).toBe(0);
     ws = new LegacyWorkspace(impl.storage);
     build(ws, impl);
-    // ownerId is deliberately never seeded: it keeps #migrateStorage inert on re-entry and
-    // makes #ownerCommitIdentity() return its fallback instead of calling a user DO.
+    // ownerId is deliberately never seeded: it keeps migrateToMultiGadget inert on re-entry and
+    // makes ownerCommitIdentity() return its fallback instead of calling a user DO.
     //
     // Last write: arm the constructor's version-1 git-storage migration trigger.
     impl.storage.version.put(1);
@@ -97,7 +97,7 @@ describe("git-storage migration via the Overseer constructor", () => {
       // The constructor's blockConcurrencyWhile completed before this event was delivered,
       // running the whole migration ladder: git storage (2), the action indexes (3), then the
       // workpiece-type stamp (4).
-      expect(impl.storage.version.get()).toBe(4);
+      expect(impl.storage.version.get()).toBe(OVERSEER_STORAGE_VERSION);
       expect([...impl.storage.actions.pendingByGatekeeper.list()].map((r: any) => r.id))
           .toEqual([1]);
       // The type stamp (3→4) covered the row the git migration wrote.
@@ -152,7 +152,7 @@ describe("git-storage migration via the Overseer constructor", () => {
     await abortAllDurableObjects();
 
     await inOverseer("git-migration-multi", async impl => {
-      expect(impl.storage.version.get()).toBe(4);
+      expect(impl.storage.version.get()).toBe(OVERSEER_STORAGE_VERSION);
 
       // Every gadget's head equals its own root's content in an independent replay of the log.
       await expectHeadsMatchDoc(impl.storage, impl.gitStore, ws.docAt("current"), 1);
@@ -197,7 +197,7 @@ describe("action-index backfills via the Overseer constructor", () => {
     await abortAllDurableObjects();
 
     await inOverseer("pending-index-v2", async impl => {
-      expect(impl.storage.version.get()).toBe(4);
+      expect(impl.storage.version.get()).toBe(OVERSEER_STORAGE_VERSION);
       // The pending index sees exactly the pendings (grouped by gatekeeper, so 1 before 3 here).
       expect([...impl.storage.actions.pendingByGatekeeper.list()].map((r: any) => r.id))
           .toEqual([1, 3]);
